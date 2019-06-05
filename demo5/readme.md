@@ -138,3 +138,247 @@ optimization: {
 ```
 
 再次打包就可以看到效果了，cacheGroups 的默认配置会定义 vendors 和 default
+
+> 再次修改 webpack.config.js
+
+```
+splitChunks: {
+    chunks: 'all',
+    minSize: 30000,
+    maxSize: 0,
+    minChunks: 1,
+    maxAsyncRequests: 5,
+    maxInitialRequests: 3,
+    automaticNameDelimiter: '~',
+    name: true,
+    cacheGroups: {
+        vendors: {
+            test: /[\\/]node_modules[\\/]/,
+            priority: -10
+        },
+        default: {
+            minChunks: 2,
+            priority: -20,
+            reuseExistingChunk: true
+        }
+    }
+}
+```
+
+test: /[\\/]node_modules[\\/]/, 使用正则过滤，只有 node_modules 引入的第三方库会被分割
+
+> 为了验证默认配置，我们将 splitChunks 属性设置为空对象，再次打包
+
+修改配置如下
+
+```
+optimization: {
+    // splitChunks: {
+    //   chunks: 'all',
+    //   cacheGroups: {
+    //     vendors: {
+    //       name: 'vendors'
+    //     }
+    //   }
+    // }
+}
+```
+
+> #### npm run dev 打包完发现只有一个文件，这是为什么?
+
+因为 chunks 默认为 async，只会分割异步的代码，而之前我们写的都是同步的代码，先 import lodash，再去写业务逻辑，现在使用异步的方式来做，将 index.js 中的代码改为以下：
+
+```
+// import _ from 'lodash'
+// console.log(_.join(['a', 'b', 'c']))
+
+function getComponent(){
+    //使用 异步代码 引入 lodash 
+    return import('lodash').then( ( {default : _ }) => {
+        var element = document.createElement('div');
+        element.innerHTML = _.join(['hello','world'],'-');
+        return element;
+    });
+}
+
+getComponent().then(element => {
+    document.body.appendChild(element);
+})
+```
+
+运行 npm run dev    
+
+```
+这里分割出了 0.js 和 main.bundle.js，0 是以 id 为编号来命名
+```
+
+所以一般我们设置 chunks 为 all，异步、同步代码都打包
+
+现在我们将 webpack 官网上的默认配置拷贝到我们的 webpack.config.js 中来分析一下
+
+```
+optimization: {
+  splitChunks: {
+    chunks: 'async',
+    minSize: 30000,
+    maxSize: 0,
+    minChunks: 1,
+    maxAsyncRequests: 5,
+    maxInitialRequests: 3,
+    automaticNameDelimiter: '~',
+    name: true,
+    cacheGroups: {
+      vendors: {
+        test: /[\\/]node_modules[\\/]/,
+        priority: -10
+      },
+      default: {
+        minChunks: 2,
+        priority: -20,
+        reuseExistingChunk: true
+      }
+    }
+  }
+}
+```
+
+webpack 代码分割的配置是这样的，比如我们要分割 jQuery 和 lodash 这样的第三方库，它会先经过 chunks、minSize、maxSize、minChunks 等等，满足条件后生成 jQuery 和 lodash 两个文件，然后放入 cacheGroup 中缓存着，再根据你在 cacheGroup 中配置的组来决定是将两个文件整合到一个文件打包，还是单独分开打包，比如上面代码中的 vendors，就是将 node_modules 中所有的第三方库都打包到 vendors.js 文件中，如果你还想继续分割可以这么做
+
+```
+cacheGroups: {
+  lodash: {
+    name: 'lodash',
+    test: /[\\/]node_modules[\\/]lodash[\\/]/,
+    priority: 5  // 优先级要大于 vendors 不然会被打包进 vendors
+  },
+  vendors: {
+    test: /[\\/]node_modules[\\/]/,
+    priority: -10
+  },
+  default: {
+    minChunks: 2,
+    priority: -20,
+    reuseExistingChunk: true
+  }
+}
+```
+
+> 如果打包有报错 Support for the experimental syntax ‘dynamicImport’ isn't currently enabled，这是因为 dynamicImport 还是实验性的语法，webpack 不支持，需要安装插件来支持，具体步骤可以参考： https://www.cnblogs.com/chaoyueqi/p/9996369.html
+
+再次打包，就可以看到 lodash 被分割出来了，以后使用第三方库都可以用这种配置来单独分割成一个 js 文件，比如 element-ui，注意设置 priority 的值很重要，优先级越高的会越先被打包
+
+
+> 如果 index.js 引入了 A.js 和 B.js，同时 A、B 又引入了 common，common 被引入了两次，可以被称为公共模块
+
+```
+// a,js
+import './common'
+console.log('A')
+export default 'A'
+
+// b.js
+import './common'
+console.log('B')
+export default 'B'
+
+// common.js
+console.log('公共模块')
+export default 'common'
+
+// index.js
+import './a.js'
+import './b.js'
+
+// 异步代码
+function getComponent() {
+  // 使用异步的形式导入 lodash，default: _ 表示用 _ 代指 lodash
+  return import('lodash').then(({ default: _ }) => {
+    var element = document.createElement('div')
+    element.innerHTML = _.join(['hello', 'world'], '-')
+    return element
+  })
+}
+
+getComponent().then(element => {
+  document.body.appendChild(element)
+})
+```
+
+上面那种异步的写法可能比较绕，现在精简一下，并且 webpack 对异步代码通过注释可以直接修改打包后的名称，以下代码全部以异步的形式引入
+
+```
+// 异步代码
+import(/* webpackChunkName: 'a'*/ './a').then(function(a) {
+  console.log(a)
+})
+
+import(/* webpackChunkName: 'b'*/ './b').then(function(b) {
+  console.log(b)
+})
+
+import(/* webpackChunkName: 'use-lodash'*/ 'lodash').then(function(_) {
+  console.log(_.join(['1', '2']))
+})
+```
+
+将 minChunks 设置为 2，最小公用 2 次才分割
+
+```
+optimization: {
+  splitChunks: {
+    chunks: 'all',
+    minSize: 30000,
+    maxSize: 0,
+    minChunks: 1,
+    maxAsyncRequests: 5,
+    maxInitialRequests: 3,
+    automaticNameDelimiter: '~',
+    name: true,
+    cacheGroups: {
+      lodash: {
+        name: 'lodash',
+        test: /[\\/]node_modules[\\/]lodash[\\/]/,
+        priority: 10
+      },
+      commons: {
+        name: 'commons',
+        minSize: 0, //表示在压缩前的最小模块大小,默认值是 30kb
+        minChunks: 2, // 最小公用次数
+        priority: 5, // 优先级
+        reuseExistingChunk: true // 公共模块必开启
+      },
+      vendors: {
+        test: /[\\/]node_modules[\\/]/,
+        priority: -10
+      },
+      default: {
+        minChunks: 2,
+        priority: -20,
+        reuseExistingChunk: true
+      }
+    }
+  }
+}
+```
+
+这里分割出了 lodash 和我们在注释中定义的 use-lodash，前者是第三库，后者是使用第三库写的业务代码，也能被分割出来
+
+> #### 打开index.html在浏览器 发现 
+
+- 页面里只因入了 打包的入口文件
+- 他会自动把我们分割的文件引入进来
+
+这里之所以会自动引入分割后的依赖，可以查看打包后的 main.bundle.js 文件
+
+- 会创建动态 script元素
+- 异步引入的依赖名
+- 拼接完整地址，这样浏览器就能找到对应的文件
+
+常用的配置项在下面的表格中，更多配置详情见[官网](https://webpack.js.org/plugins/split-chunks-plugin/)
+
+![](./aa.png)
+
+#### 参考文章
+
+- [webpack4 系列教程 (三): 多页面解决方案 -- 提取公共代码](https://link.juejin.im/?target=https%3A%2F%2Fgodbmw.com%2Fpassages%2F2018-08-06-webpack-mutiple-pages%2F)
+- [webpack 官网](https://webpack.js.org/plugins/split-chunks-plugin/#splitchunks-cachegroups-cachegroup-reuseexistingchunk)
